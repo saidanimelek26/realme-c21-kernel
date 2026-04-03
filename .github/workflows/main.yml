@@ -1,159 +1,33 @@
-name: Kernel Build 4.19 + KernelSU (Fixed)
+name: Kernel Build
 
 on:
-  push:
-    branches:
-      - master
-  pull_request:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-      # =========================
-      # Checkout
-      # =========================
-      - name: Checkout kernel source
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
 
-      # =========================
-      # Dependencies
-      # =========================
-      - name: Install dependencies
+      - name: Setup environment
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex git \
-            libncurses-dev libssl-dev lld llvm make python3 unzip wget xz-utils zip
+          sudo apt update
+          sudo apt install -y bc bison flex libssl-dev make clang
 
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: ${{ runner.os }}-ccache-${{ github.ref_name }}
-          restore-keys: |
-            ${{ runner.os }}-ccache-
-
-      # =========================
-      # Toolchains
-      # =========================
-      - name: Download GCC 4.9
+      - name: Configure kernel
         run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9 -b android11-release gcc-4.9
-
-      - name: Download Clang
-        run: |
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android10-dev/clang-r353983c.tar.gz -O clang.tar.gz
-          mkdir clang && tar -xf clang.tar.gz -C clang
-
-      - name: Setup PATH
-        run: |
-          echo "$GITHUB_WORKSPACE/clang/bin:$GITHUB_WORKSPACE/gcc-4.9/bin:/usr/bin:/bin" >> $GITHUB_PATH
-
-      - name: Setup ccache
-        run: |
-          mkdir -p ~/.ccache/bin
-          ln -sf $(which ccache) ~/.ccache/bin/clang
-          ln -sf $(which ccache) ~/.ccache/bin/clang++
-          ln -sf $(which ccache) ~/.ccache/bin/aarch64-linux-android-gcc
-          ln -sf $(which ccache) ~/.ccache/bin/aarch64-linux-android-g++
-          echo "$HOME/.ccache/bin:$PATH" >> $GITHUB_PATH
-
-      # =========================
-      # Build Kernel
-      # =========================
-      - name: Build kernel with KernelSU
-        run: |
-          set -e
-
-          export KBUILD_BUILD_USER="snowluna"
-          export KBUILD_BUILD_HOST="android-build"
-
           cd kernel
-
-          # Clean first (VERY IMPORTANT)
-          rm -rf out/
-          make clean
-          make mrproper
-
-          mkdir -p out
-
-          # Load defconfig
-          make O=out ARCH=arm64 oppo6765_defconfig
-
-          # =========================
-          # Inject KernelSU (AFTER clean)
-          # =========================
-          rm -rf drivers/KernelSU
-
-          git clone https://github.com/tiann/KernelSU.git \
-            --depth=1 --branch v0.9.5 drivers/KernelSU
-
-          # Link KernelSU
-          grep -q "KernelSU" drivers/Makefile || echo 'obj-y += KernelSU/' >> drivers/Makefile
-          grep -q "KernelSU" drivers/Kconfig || echo 'source "drivers/KernelSU/Kconfig"' >> drivers/Kconfig
-
-          # =========================
-          # Enable configs (IMPORTANT)
-          # =========================
-          scripts/config --file out/.config \
-            --enable CONFIG_KSU \
-            --enable CONFIG_KPROBES \
-            --enable CONFIG_HAVE_KPROBES \
-            --enable CONFIG_KALLSYMS \
-            --enable CONFIG_KALLSYMS_ALL
-
-          # Regenerate config
+          make O=out ARCH=arm64 k65v1_64_bsp_defconfig
+          scripts/config --file out/.config --enable CONFIG_KSU
           make O=out ARCH=arm64 olddefconfig
 
-          # =========================
-          # Build
-          # =========================
-          make -j$(nproc --all) \
-            ARCH=arm64 \
-            O=out \
-            CC=clang \
-            CROSS_COMPILE="$GITHUB_WORKSPACE/gcc-4.9/bin/aarch64-linux-android-" \
-            CLANG_TRIPLE=aarch64-linux-gnu-
-
-          # Check result
-          if [ -f "out/arch/arm64/boot/Image.gz" ]; then
-            echo "✅ Build successful!"
-          else
-            echo "❌ Build failed!"
-            exit 1
-          fi
-
-      # =========================
-      # Stats
-      # =========================
-      - name: Show ccache stats
-        run: ccache -s || true
-
-      # =========================
-      # Packaging
-      # =========================
-      - name: Prepare flashable zip
+      - name: Build kernel
         run: |
-          set -e
-
-          mkdir -p artifact
-          cp kernel/out/arch/arm64/boot/Image.gz artifact/
-
           cd kernel
-          KVER=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} END {print v"."p"."s}' Makefile)
-          cd $GITHUB_WORKSPACE
-
-          echo "KVER=$KVER" >> $GITHUB_ENV
-
-          git clone --depth=1 https://github.com/NyxNoirXD/AnyKernel3.git ak
-          cp -r ak/* artifact/
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: KernelSU-${{ env.KVER }}
-          path: artifact/*
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu-
