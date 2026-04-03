@@ -1,0 +1,6 @@
+[submodule "drivers/KernelSU"]
+	path = drivers/KernelSU
+	url = https://github.com/tiann/KernelSU.git
+[submodule "kernel/drivers/KernelSU"]
+	path = kernel/drivers/KernelSU
+	url = https://github.com/tiann/KernelSU.git
